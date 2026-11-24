@@ -1,0 +1,12 @@
+{
+  "name": "snake-game",
+  "version": "1.0.0",
+  "private": true,
+  "description": "貪食蛇前端網頁遊戲（純 HTML / Canvas / JavaScript，無外部依賴）",
+  "scripts": {
+    "test": "node --test tests/logic.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

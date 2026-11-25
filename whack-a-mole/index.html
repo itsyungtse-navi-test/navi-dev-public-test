@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>打地鼠</title>
+  <style>
+    :root { --bg: #8bc34a; --dirt: #5d4037; --hole: #3e2723; --mole: #a1887f; --text: #1b1b1b; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; touch-action: manipulation; }
+    body {
+      font-family: system-ui, -apple-system, "Noto Sans TC", sans-serif;
+      background: var(--bg); color: var(--text);
+      display: flex; flex-direction: column; align-items: center;
+      padding: 16px; -webkit-user-select: none; user-select: none;
+    }
+    h1 { margin: 8px 0 12px; font-size: 1.8rem; }
+    .hud { display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; font-size: 1.1rem; margin-bottom: 12px; }
+    .hud strong { font-variant-numeric: tabular-nums; }
+    .controls { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; margin-bottom: 16px; }
+    select, button { font-size: 1rem; padding: 8px 14px; border-radius: 8px; border: 2px solid var(--dirt); background: #fff; }
+    button { cursor: pointer; background: #ffeb3b; font-weight: 600; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    :focus-visible { outline: 3px solid #1565c0; outline-offset: 2px; }
+    .board {
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
+      width: min(92vw, 420px);
+    }
+    .hole {
+      position: relative; aspect-ratio: 1; border: none; padding: 0;
+      border-radius: 50%; background: radial-gradient(circle at 50% 60%, var(--hole) 55%, var(--dirt) 56%);
+      overflow: hidden; cursor: pointer;
+    }
+    .mole {
+      position: absolute; left: 15%; width: 70%; height: 70%; bottom: -75%;
+      border-radius: 50% 50% 40% 40%; background: var(--mole);
+      transition: bottom .12s ease-out; pointer-events: none;
+      display: flex; align-items: center; justify-content: center; font-size: 2rem;
+    }
+    .hole.up .mole { bottom: 8%; }
+    .hole.hit .mole { background: #e57373; }
+    .message { min-height: 1.5em; margin-top: 16px; font-size: 1.2rem; font-weight: 600; text-align: center; }
+    .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  </style>
+</head>
+<body>
+  <h1>🔨 打地鼠</h1>
+
+  <div class="hud" aria-live="polite">
+    <span>分數：<strong id="score">0</strong></span>
+    <span>剩餘時間：<strong id="time">30</strong> 秒</span>
+    <span>最高分：<strong id="best">0</strong></span>
+  </div>
+
+  <div class="controls">
+    <label for="difficulty" class="sr-only">難度</label>
+    <select id="difficulty" aria-label="選擇難度">
+      <option value="easy">簡單</option>
+      <option value="normal" selected>普通</option>
+      <option value="hard">困難</option>
+    </select>
+    <button id="start" type="button">開始遊戲</button>
+  </div>
+
+  <div class="board" id="board" role="group" aria-label="地鼠洞"></div>
+  <p class="message" id="message" role="status" aria-live="polite">選好難度後按「開始遊戲」</p>
+
+  <script src="game-logic.js"></script>
+  <script>
+  (function () {
+    'use strict';
+    var L = window.WhackLogic;
+    var HOLES = 9;
+
+    // 部分瀏覽器（隱私模式、沙盒 iframe）存取 localStorage 會拋錯
+    var storage = null;
+    try { storage = window.localStorage; } catch (e) { storage = null; }
+
+    var els = {
+      board: document.getElementById('board'),
+      score: document.getElementById('score'),
+      time: document.getElementById('time'),
+      best: document.getElementById('best'),
+      start: document.getElementById('start'),
+      difficulty: document.getElementById('difficulty'),
+      message: document.getElementById('message')
+    };
+
+    var holes = [];
+    for (var i = 0; i < HOLES; i++) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'hole';
+      btn.dataset.index = String(i);
+      btn.setAttribute('aria-label', '第 ' + (i + 1) + ' 個洞');
+      var mole = document.createElement('span');
+      mole.className = 'mole';
+      mole.setAttribute('aria-hidden', 'true');
+      mole.textContent = '🐹';
+      btn.appendChild(mole);
+      els.board.appendChild(btn);
+      holes.push(btn);
+    }
+
+    var state = null;
+    var lastHole = -1;
+    var tickTimer = null, spawnTimer = null, hideTimer = null;
+    var best = L.loadHighScore(storage);
+    els.best.textContent = best;
+
+    function clearTimers() {
+      clearInterval(tickTimer); clearTimeout(spawnTimer); clearTimeout(hideTimer);
+      tickTimer = spawnTimer = hideTimer = null;
+    }
+
+    function render() {
+      els.score.textContent = state.score;
+      els.time.textContent = state.timeLeft;
+      holes.forEach(function (h, idx) {
+        var up = idx === state.activeHole;
+        h.classList.toggle('up', up);
+        h.setAttribute('aria-label', '第 ' + (idx + 1) + ' 個洞' + (up ? '，有地鼠' : ''));
+      });
+    }
+
+    function spawn() {
+      if (!state || !state.running) return;
+      var diff = L.getDifficulty(state.difficulty);
+      lastHole = L.pickHole(HOLES, lastHole);
+      state = L.popMole(state, lastHole);
+      render();
+      var id = state.moleId;
+      hideTimer = setTimeout(function () {
+        if (state.moleId === id) { state = L.hideMole(state); render(); }
+      }, diff.stayMs);
+      spawnTimer = setTimeout(spawn, diff.stayMs + diff.intervalMs * 0.3);
+    }
+
+    function end() {
+      clearTimers();
+      var prev = best;
+      best = L.saveHighScore(storage, state.score);
+      els.best.textContent = best;
+      els.message.textContent = '時間到！你得了 ' + state.score + ' 分' +
+        (best > prev ? '，創下新紀錄！' : '。');
+      els.start.disabled = false;
+      els.difficulty.disabled = false;
+      els.start.textContent = '再玩一次';
+      render();
+    }
+
+    function start() {
+      clearTimers();
+      state = L.createState(els.difficulty.value);
+      lastHole = -1;
+      els.start.disabled = true;
+      els.difficulty.disabled = true;
+      els.message.textContent = '難度：' + L.getDifficulty(state.difficulty).label + '，開始！';
+      render();
+      tickTimer = setInterval(function () {
+        state = L.tick(state);
+        render();
+        if (!state.running) end();
+      }, 1000);
+      spawnTimer = setTimeout(spawn, 400);
+    }
+
+    // pointerdown 比 click 反應更即時（觸控無 300ms 延遲）
+    function onWhack(idx) {
+      if (!state) return;
+      var r = L.hit(state, idx);
+      if (!r.scored) return;
+      state = r.state;
+      clearTimeout(hideTimer);
+      var h = holes[idx];
+      h.classList.add('hit');
+      setTimeout(function () { h.classList.remove('hit'); }, 150);
+      render();
+    }
+
+    els.board.addEventListener('pointerdown', function (e) {
+      var h = e.target.closest('.hole');
+      if (!h) return;
+      e.preventDefault();
+      onWhack(Number(h.dataset.index));
+    });
+    // 鍵盤操作：Enter / 空白鍵觸發 button 的 click（detail === 0 代表非指標觸發）
+    els.board.addEventListener('click', function (e) {
+      if (e.detail !== 0) return;
+      var h = e.target.closest('.hole');
+      if (h) onWhack(Number(h.dataset.index));
+    });
+    // 數字鍵 1–9 對應九個洞
+    document.addEventListener('keydown', function (e) {
+      var n = Number(e.key);
+      if (n >= 1 && n <= HOLES) onWhack(n - 1);
+    });
+    // 禁止雙擊縮放
+    document.addEventListener('dblclick', function (e) { e.preventDefault(); }, { passive: false });
+
+    els.start.addEventListener('click', start);
+  })();
+  </script>
+</body>
+</html>

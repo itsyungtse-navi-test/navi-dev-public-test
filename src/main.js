@@ -17,11 +17,16 @@ const BestScore = {
     try {
       if (window.Navi && Navi.putState) {
         const s = (await Navi.getState()) || {};
+        // 已存的紀錄比較高時不覆寫（例如頁面還沒讀到舊紀錄就結束了一局）
+        if ((Number(s.bestScore) || 0) >= score) return;
         await Navi.putState({ ...s, bestScore: score });
         return;
       }
     } catch (e) { console.warn("儲存最高分失敗，改用本機儲存", e); }
-    try { localStorage.setItem("snake.best", String(score)); } catch (e) {}
+    try {
+      if ((Number(localStorage.getItem("snake.best")) || 0) >= score) return;
+      localStorage.setItem("snake.best", String(score));
+    } catch (e) {}
   },
 };
 
@@ -210,5 +215,6 @@ const BestScore = {
   window.addEventListener("resize", resize);
   resize();
   updateHud();
-  BestScore.load().then(v => { best = v; updateHud(); });
+  // 讀取可能比第一局結束還慢，取較大值，避免把剛打出的分數蓋掉
+  BestScore.load().then(v => { best = Math.max(best, v); updateHud(); });
 })();
